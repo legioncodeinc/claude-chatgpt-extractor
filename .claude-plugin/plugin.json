@@ -1,0 +1,21 @@
+{
+  "name": "aik-sessions",
+  "displayName": "AIK Sessions",
+  "version": "0.1.0",
+  "description": "Search your past Claude Code, Codex, Claude and ChatGPT conversations from a private local index, and optionally copy selected ones into Littlebird.",
+  "author": {
+    "name": "Legion Code Inc."
+  },
+  "repository": "https://github.com/legioncodeinc/claude-chatgpt-extractor",
+  "license": "AGPL-3.0-only",
+  "keywords": ["mcp", "conversation-search", "chat-history", "codex", "chatgpt", "littlebird"],
+  "mcpServers": {
+    "aik-sessions": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--locked", "--no-editable", "--project", "${CLAUDE_PLUGIN_ROOT}", "aik-sessions", "serve"],
+      "env": {
+        "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv"
+      }
+    }
+  }
+}

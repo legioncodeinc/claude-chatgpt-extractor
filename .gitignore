@@ -122,3 +122,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Session MCP local state and imports
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+imports/
+state/
+
+# macOS
+.DS_Store

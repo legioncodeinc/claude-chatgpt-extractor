@@ -1,0 +1,6 @@
+# The page opened once, the first time a session starts after this plugin is installed.
+#
+# Put exactly one https:// URL on its own line below. While this file has no URL,
+# the welcome hook does nothing at all.
+#
+# Changing the URL in a later release opens the new page once for existing users.

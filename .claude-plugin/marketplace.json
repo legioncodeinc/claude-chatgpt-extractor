@@ -1,0 +1,14 @@
+{
+  "name": "legion-code",
+  "description": "Plugins published by Legion Code Inc.",
+  "owner": {
+    "name": "Legion Code Inc."
+  },
+  "plugins": [
+    {
+      "name": "aik-sessions",
+      "source": "./",
+      "description": "Search your past Claude Code, Codex, Claude and ChatGPT conversations from a private local index."
+    }
+  ]
+}
