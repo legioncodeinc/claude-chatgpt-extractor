@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aik-sessions": {
+      "command": "/absolute/path/to/aik-sessions",
+      "args": ["serve"]
+    }
+  }
+}

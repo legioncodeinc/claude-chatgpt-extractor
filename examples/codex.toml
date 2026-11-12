@@ -1,0 +1,5 @@
+[mcp_servers.aik_sessions]
+command = "/absolute/path/to/aik-sessions"
+args = ["serve"]
+startup_timeout_sec = 20
+tool_timeout_sec = 120

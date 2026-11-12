@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aik-session-mcp"
+version = "0.1.0"
+description = "Local search and selected Littlebird ingestion for Claude, Codex, and chat exports."
+requires-python = ">=3.14"
+dependencies = ["mcp==2.3.0", "pydantic>=2.12,<3", "httpx2>=2.16,<3"]
+readme = "README.md"
+authors = [{name = "Legion Code Inc."}]
+
+[project.scripts]
+aik-sessions = "aik_sessions.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aik_sessions"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["src"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
