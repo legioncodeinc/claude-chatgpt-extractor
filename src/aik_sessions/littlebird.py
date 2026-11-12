@@ -378,7 +378,8 @@ async def send_batch(index: DeliveryIndex, documents: list[dict[str, Any]],
     for document in documents:
         if index.delivery_status(document["id"], document["content_hash"]) == "uncertain":
             report.update(uncertain=1, error="A prior delivery is uncertain; resolve its ledger entry before sending again.",
-                          blocked_document_id=document["id"])
+                          blocked_document_id=document["id"],
+                          blocked_content_hash=document["content_hash"])
             return report
     for document in documents:
         identity, digest = document["id"], document["content_hash"]
@@ -394,22 +395,26 @@ async def send_batch(index: DeliveryIndex, documents: list[dict[str, Any]],
             index.mark_delivery(identity, digest, "uncertain", message)
             if isinstance(exc, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
                 raise
-            report.update(uncertain=1, error=message, blocked_document_id=identity)
+            report.update(uncertain=1, error=message, blocked_document_id=identity,
+                          blocked_content_hash=digest)
             return report
         if _field(result, "is_error", "isError", False):
             message = "Littlebird returned a tool error after dispatch; delivery may have succeeded. Resolve before resending."
             index.mark_delivery(identity, digest, "uncertain", message)
-            report.update(uncertain=1, error=message, blocked_document_id=identity)
+            report.update(uncertain=1, error=message, blocked_document_id=identity,
+                          blocked_content_hash=digest)
             return report
         if _field(result, "result_type", "resultType", "complete") != "complete":
             message = "Littlebird did not return a completed ingestion result; resolve delivery before resending."
             index.mark_delivery(identity, digest, "uncertain", message)
-            report.update(uncertain=1, error=message, blocked_document_id=identity)
+            report.update(uncertain=1, error=message, blocked_document_id=identity,
+                          blocked_content_hash=digest)
             return report
         if not isinstance(_field(result, "content"), list):
             message = "Littlebird returned no valid tool acknowledgement; resolve delivery before resending."
             index.mark_delivery(identity, digest, "uncertain", message)
-            report.update(uncertain=1, error=message, blocked_document_id=identity)
+            report.update(uncertain=1, error=message, blocked_document_id=identity,
+                          blocked_content_hash=digest)
             return report
         index.mark_delivery(identity, digest, "sent")
         report["sent"] += 1
@@ -449,7 +454,9 @@ async def ingest(index: DeliveryIndex, *, data_dir: Path, source: str | None = N
                     uncertain = next((doc for doc in documents if index.delivery_status(doc["id"], doc["content_hash"]) == "uncertain"), None)
                     if uncertain:
                         report.update(uncertain=1, error="A prior delivery is uncertain; resolve its ledger entry before sending again.",
-                                      blocked_document_id=uncertain["id"], next_cursor=cursor, done=False)
+                                      blocked_document_id=uncertain["id"],
+                                      blocked_content_hash=uncertain["content_hash"],
+                                      next_cursor=cursor, done=False)
                         return report
                     pending = [doc for doc in documents if not index.delivered(doc["id"], doc["content_hash"])]
                     if send and pending:
@@ -467,6 +474,7 @@ async def ingest(index: DeliveryIndex, *, data_dir: Path, source: str | None = N
                             report[name] += progress[name]
                         if progress["error"]:
                             report.update(error=progress["error"], blocked_document_id=progress.get("blocked_document_id"),
+                                          blocked_content_hash=progress.get("blocked_content_hash"),
                                           next_cursor=cursor, done=False)
                             return report
                     else:

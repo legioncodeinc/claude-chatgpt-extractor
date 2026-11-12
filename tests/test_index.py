@@ -236,6 +236,36 @@ class IndexTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.index.search("webhook", end_date=12)
 
+    def test_search_reports_position_and_explicit_paging(self) -> None:
+        item = session()
+        item.messages.append(Message(id="m-extra", role="assistant",
+                                     text="A later reply about the zeppelin manifest."))
+        item.messages.append(Message(id="m-extra-2", role="user",
+                                     text="Confirm the zeppelin manifest again."))
+        self.index.upsert(item)
+        first = self.index.search("zeppelin", limit=1)
+        self.assertEqual((first["total"], first["has_more"], first["next_offset"]), (2, True, 1))
+        last = self.index.search("zeppelin", limit=1, offset=first["next_offset"])
+        self.assertEqual((last["has_more"], last["next_offset"]), (False, None))
+        positions = {first["results"][0]["position"], last["results"][0]["position"]}
+        self.assertEqual(positions, {len(item.messages) - 2, len(item.messages) - 1})
+        for hit in (first["results"][0], last["results"][0]):
+            page = self.index.read(item.id, offset=hit["position"], limit=1)
+            self.assertEqual(page["messages"][0]["id"], hit["message_id"])
+            self.assertEqual(page["messages"][0]["role"], hit["role"])
+        unsearchable = self.index.search("?!")
+        self.assertEqual(unsearchable["results"], [])
+        self.assertIn("no searchable words", unsearchable["note"])
+
+    def test_title_match_returns_messages_whose_text_lacks_the_words(self) -> None:
+        # The documented contract: words may match the message text or the conversation
+        # title. Tool descriptions and docs/tools.md state this; keep them in step.
+        item = session(title="Zeppelin budget review", text="thanks, that works")
+        self.index.upsert(item)
+        result = self.index.search("zeppelin budget")
+        self.assertEqual(result["total"], 1)
+        self.assertNotIn("zeppelin", result["results"][0]["snippet"].lower())
+
     def test_read_is_paginated_and_missing_is_explicit(self) -> None:
         item = session()
         item.messages.append(Message(id="m2", role="assistant", text="A response"))
@@ -336,6 +366,17 @@ class IndexTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "database must be private"):
             SessionIndex(self.index.db_path)
         self.assertEqual(self.index.db_path.stat().st_mode & 0o777, 0o644)
+
+    def test_suggested_chmod_command_is_safe_to_paste(self) -> None:
+        import shlex
+        directory = self.root / "o'brien; echo PWNED #"
+        directory.mkdir(mode=0o755)
+        directory.chmod(0o755)
+        with self.assertRaises(ValueError) as raised:
+            SessionIndex(directory / "index.sqlite3")
+        command = str(raised.exception).split("Fix it with: ", 1)[1]
+        # A shell must see exactly three words, the last being the untouched path.
+        self.assertEqual(shlex.split(command), ["chmod", "700", str(directory)])
 
     def test_same_index_can_be_called_from_worker_threads(self) -> None:
         with ThreadPoolExecutor(max_workers=4) as executor:

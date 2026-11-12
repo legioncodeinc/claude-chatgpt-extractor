@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -120,7 +121,9 @@ class SessionIndex:
         if not parent.exists():
             parent.mkdir(parents=True, mode=0o700)
         if os.name == "posix" and parent.stat().st_mode & 0o077:
-            raise ValueError("The index directory must be private (mode 0700)")
+            raise ValueError(
+                "The index directory must be private (mode 0700). "
+                f"Fix it with: chmod 700 {shlex.quote(str(parent))}")
         if self.db_path.is_symlink():
             raise ValueError("The index database must not be a symbolic link")
         try:
@@ -131,7 +134,9 @@ class SessionIndex:
         else:
             os.close(fd)
         if os.name == "posix" and self.db_path.stat().st_mode & 0o077:
-            raise ValueError("The index database must be private (mode 0600)")
+            raise ValueError(
+                "The index database must be private (mode 0600). "
+                f"Fix it with: chmod 600 {shlex.quote(str(self.db_path))}")
         self._initialize()
 
     @contextmanager
@@ -348,8 +353,13 @@ class SessionIndex:
             operator = "<" if len(end_date) == 10 else "<="
             where.append(f"julianday({timestamp}) {operator} julianday(?)")
             parameters.append(end_bound)
-        result: dict[str, Any] = {"results": [], "total": 0, "limit": limit, "offset": offset}
+        result: dict[str, Any] = {"results": [], "total": 0, "limit": limit, "offset": offset,
+                                  "has_more": False, "next_offset": None}
         if match is None:
+            # Nothing searchable (for example punctuation only). Say so instead of
+            # returning an empty page that looks like "no such conversation".
+            result["note"] = ("The query has no searchable words. Use letters or digits; "
+                              "wrap an exact phrase in double quotes.")
             return result
         joins = " FROM message_fts JOIN messages m ON m.id = message_fts.rowid " \
                 "JOIN sessions s ON s.id = m.session_id WHERE " + " AND ".join(where)
@@ -359,7 +369,8 @@ class SessionIndex:
                 "SELECT COUNT(*)" + joins, parameters
             ).fetchone()[0])
             rows = connection.execute("""
-                SELECT s.id AS session_id, m.message_id, s.source, s.title, s.project,
+                SELECT s.id AS session_id, m.message_id, m.position, m.role,
+                    s.source, s.title, s.project,
                     COALESCE(m.timestamp, s.started_at, s.updated_at) AS timestamp,
                     snippet(message_fts, 0, '', '', ' ... ', 32) AS snippet,
                     bm25(message_fts, 1.0, 2.0) AS score
@@ -367,6 +378,10 @@ class SessionIndex:
             result["results"] = [
                 dict(row) | {"snippet": row["snippet"][:500]} for row in rows
             ]
+        # Explicit paging fields, so a caller never has to infer whether more hits exist.
+        shown = offset + len(result["results"])
+        result["has_more"] = shown < result["total"]
+        result["next_offset"] = shown if result["has_more"] else None
         return result
 
     def read(self, session_id: str, *, offset: int = 0, limit: int = 30) -> dict[str, Any]:

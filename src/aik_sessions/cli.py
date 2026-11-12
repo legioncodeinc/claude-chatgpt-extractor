@@ -148,6 +148,10 @@ def main() -> None:
             sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
             if result.get("error") or result.get("failed"):
                 raise SystemExit(1)
+    except LookupError as exc:
+        # For example an unknown session ID. str(KeyError) would add stray quotes.
+        sys.stderr.write(f"aik-sessions: {exc.args[0] if exc.args else 'not found'}\n")
+        raise SystemExit(1) from None
     except (OSError, ValueError, RuntimeError) as exc:
         # Error text is local metadata or a controlled message, not a transcript fragment.
         sys.stderr.write(f"aik-sessions: {exc}\n")

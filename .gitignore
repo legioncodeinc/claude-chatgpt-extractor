@@ -130,3 +130,6 @@ dmypy.json
 *.sqlite*
 imports/
 state/
+
+# macOS
+.DS_Store

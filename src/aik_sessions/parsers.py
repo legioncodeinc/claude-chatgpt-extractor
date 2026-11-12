@@ -57,7 +57,8 @@ def parse_file(file: DiscoveredFile) -> ParseResult:
         else:
             with path.open("rb") as stream:
                 _parse_stream(stream, str(path), path.name, file.source, result)
-    except (OSError, ValueError, UnicodeError, NotImplementedError, zstd.ZstdError, zipfile.BadZipFile) as error:
+    except (OSError, ValueError, UnicodeError, NotImplementedError, RecursionError,
+            zstd.ZstdError, zipfile.BadZipFile) as error:
         result.warnings.append(f"Could not read {path} ({type(error).__name__}).")
     for session in result.sessions:
         session.metadata["archived"] = file.archived
@@ -97,7 +98,8 @@ def _parse_zip(path: Path, file: DiscoveredFile, result: ParseResult) -> None:
             try:
                 with archive.open(member) as stream:
                     _parse_stream(stream, f"{path}!/{name}", name, file.source, result, budget)
-            except (OSError, ValueError, UnicodeError, NotImplementedError, zstd.ZstdError, zipfile.BadZipFile) as error:
+            except (OSError, ValueError, UnicodeError, NotImplementedError, RecursionError,
+                    zstd.ZstdError, zipfile.BadZipFile) as error:
                 result.warnings.append(
                     f"Could not read ZIP member {path}!/{name} ({type(error).__name__})."
                 )
@@ -136,7 +138,8 @@ def _parse_stream(
             return
         try:
             document: object = json.loads(raw.decode("utf-8-sig"))
-        except (UnicodeError, json.JSONDecodeError):
+        except (UnicodeError, json.JSONDecodeError, RecursionError):
+            # RecursionError: pathologically nested JSON. Skip the file, keep indexing.
             result.warnings.append(f"Invalid JSON export: {label}")
             return
         _parse_export(document, label, result)
@@ -195,7 +198,7 @@ def _records(
             continue
         try:
             value: object = json.loads(raw.decode("utf-8-sig"))
-        except (UnicodeError, json.JSONDecodeError):
+        except (UnicodeError, json.JSONDecodeError, RecursionError):
             kind = "Incomplete final JSONL record" if not raw.endswith(b"\n") else "Invalid JSONL record"
             warn(f"{kind} at line {line_number}: {label}")
             continue

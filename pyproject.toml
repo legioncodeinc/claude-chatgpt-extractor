@@ -17,6 +17,11 @@ aik-sessions = "aik_sessions.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/aik_sessions"]
 
+[tool.uv]
+# The plugin runs this project non-editable. Rebuild whenever source changes, not only
+# when pyproject.toml does, so a stale build is never served.
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.py" }]
+
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"

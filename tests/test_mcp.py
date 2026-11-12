@@ -10,7 +10,8 @@ from pathlib import Path
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-from aik_sessions.server import BearerGate, create_server
+from aik_sessions.index import SessionIndex
+from aik_sessions.server import BearerGate, _annotate_search, create_server
 from aik_sessions.service import SessionService, Settings
 
 
@@ -79,6 +80,102 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(minimum["documents"])
                 too_small = await client.call_tool("sessions_export_batch", {"max_chars": 1000})
                 self.assertTrue(too_small.model_dump(by_alias=True).get("isError"))
+
+    def _stdio(self, *extra):
+        src = str(Path(__file__).resolve().parents[1] / "src")
+        return StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "aik_sessions", "--home", str(self.home), "--data-dir",
+                  str(self.settings.data_dir), *extra, "serve", "--no-auto-index"],
+            env={"PYTHONPATH": src},
+        )
+
+    @staticmethod
+    def _error_text(result):
+        value = result.model_dump(by_alias=True)
+        assert value.get("isError"), value
+        return " ".join(item.get("text", "") for item in value["content"])
+
+    async def test_failures_tell_the_calling_model_what_to_fix(self):
+        async with stdio_client(self._stdio()) as streams:
+            async with ClientSession(*streams) as client:
+                await client.initialize()
+                unknown = self._error_text(await client.call_tool(
+                    "sessions_read", {"session_id": "codex:missing"}))
+                self.assertIn("Session not found: codex:missing", unknown)
+                self.assertIn("source prefix", unknown)
+                bad_date = self._error_text(await client.call_tool(
+                    "sessions_search", {"query": "harbor", "start_date": "last week"}))
+                self.assertIn("YYYY-MM-DD", bad_date)
+                reversed_dates = self._error_text(await client.call_tool(
+                    "sessions_search", {"query": "harbor", "start_date": "2026-11-12",
+                                        "end_date": "2026-11-01"}))
+                self.assertIn("on or before end_date", reversed_dates)
+                cursor = self._error_text(await client.call_tool(
+                    "sessions_export_batch", {"after": "garbage"}))
+                self.assertIn("Invalid export cursor", cursor)
+
+    async def test_search_results_compose_with_read_and_explain_empty_pages(self):
+        async with stdio_client(self._stdio()) as streams:
+            async with ClientSession(*streams) as client:
+                await client.initialize()
+                found = structured(await client.call_tool("sessions_search", {"query": "harbor"}))
+                hit = found["results"][0]
+                self.assertEqual((hit["position"], hit["role"]), (0, "user"))
+                self.assertFalse(found["has_more"])
+                self.assertIsNone(found["next_offset"])
+                self.assertNotIn("note", found)
+                page = structured(await client.call_tool("sessions_read", {
+                    "session_id": hit["session_id"], "offset": hit["position"]}))
+                self.assertEqual(page["messages"][0]["id"], hit["message_id"])
+                missing = structured(await client.call_tool(
+                    "sessions_search", {"query": "nonexistent", "source": "codex"}))
+                self.assertIn("keyword based", missing["note"])
+                self.assertIn("filters", missing["note"])
+                symbols = structured(await client.call_tool("sessions_search", {"query": "!!!"}))
+                self.assertIn("no searchable words", symbols["note"])
+                status = structured(await client.call_tool("sessions_status", {}))
+                self.assertEqual(status["indexing"]["state"], "never_run")
+                self.assertEqual(status["stats"]["sessions"], 1)
+
+    async def test_empty_index_search_says_how_to_recover(self):
+        empty = Settings(data_dir=self.root / "empty-state", home=self.root / "no-home")
+        server, _ = create_server(empty)
+        result = await server.call_tool("sessions_search", {"query": "harbor"})
+        self.assertIn("sessions_refresh", json.dumps(result, default=str))
+
+    async def test_every_tool_and_parameter_is_described_for_the_model(self):
+        async with stdio_client(self._stdio()) as streams:
+            async with ClientSession(*streams) as client:
+                initialized = await client.initialize()
+                self.assertIn("sessions_search", initialized.instructions)
+                for tool in (await client.list_tools()).tools:
+                    described = tool.model_dump(by_alias=True)
+                    self.assertGreater(len(described["description"]), 120, tool.name)
+                    self.assertTrue(described.get("title"), tool.name)
+                    self.assertIsNotNone(described["annotations"]["readOnlyHint"], tool.name)
+                    for name, schema in described["inputSchema"].get("properties", {}).items():
+                        self.assertTrue(schema.get("description"), f"{tool.name}.{name}")
+
+    async def test_search_notes_cover_building_index_and_offset_past_the_end(self):
+        index = SessionIndex(self.settings.database)
+
+        class Building:
+            def progress(self):
+                return {"state": "running"}
+
+        hit = _annotate_search(index.search("harbor"), index, Building(),
+                               offset=0, filtered=False)
+        self.assertTrue(hit["results"])
+        self.assertIn("still building", hit["note"])
+        idle = SessionService(self.settings)
+        past_end = _annotate_search(index.search("harbor", offset=5), index, idle,
+                                    offset=5, filtered=False)
+        self.assertEqual((past_end["results"], past_end["total"]), ([], 1))
+        self.assertEqual(past_end["note"], "No more results at this offset.")
+        title_aware = _annotate_search(index.search("nonexistent"), index, idle,
+                                       offset=0, filtered=False)
+        self.assertIn("conversation title", title_aware["note"])
 
     async def test_http_bearer_rejects_before_app_and_lifespan_is_forwarded(self):
         calls = []

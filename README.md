@@ -1,160 +1,150 @@
 # claude-chatgpt-extractor
 
-Search Claude Code, Codex, Claude chat exports, and ChatGPT chat exports from a local MCP server. Connect the server to Littlebird for live searches, or explicitly copy selected indexed conversations into Littlebird's context.
+Search every conversation you have had with Claude Code, Codex, Claude and ChatGPT from any MCP client, using a private index that stays on your computer.
 
-By Legion Code Inc. This package is independent of the AIK.dev application runtime.
+<!-- TODO: readme-writing: add CI, release and license badges once a CI workflow and a tagged release exist. None are shown now because none would be live. -->
 
-## Sources
+`aik-sessions` is a local MCP server and command-line tool. It builds a private full-text index of your AI conversations, then lets Littlebird, Claude Code, Codex or any other MCP client search and read them on demand. By Legion Code Inc.
 
-| Source | Discovery and import |
-| --- | --- |
-| Claude Code | `~/.claude/projects/**/*.jsonl`, including nested subagents |
-| Codex CLI and desktop | `~/.codex/sessions/` and `~/.codex/archived_sessions/`, including `.jsonl.zst` |
-| Regular Claude web/desktop chats | Claude conversation JSON exports, individually or inside an export ZIP |
-| Regular ChatGPT web/desktop chats | ChatGPT conversation JSON exports, individually or inside an export ZIP |
+## Quickstart
 
-Coding clients provide local transcripts. Ordinary browser and desktop chat histories use the providers' exports; this package does not scrape browser cookies, passwords, app databases, or cloud accounts. An export must be downloaded before its conversations can be indexed. See the official [ChatGPT export instructions](https://help.openai.com/en/articles/7260999-exporting-your-chatgpt-history-and-data) and [Claude export instructions](https://support.claude.com/en/articles/9450526-how-can-i-export-my-claude-data).
-
-Default discovery respects `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. You can override both roots with command-line flags. Explicit import folders are searched recursively. Nothing searches your entire home directory or Downloads automatically.
-
-## Install locally
-
-Requires Python **3.14 or later** for standard-library Zstandard decompression. The package pins the official MCP Python SDK to the tested **2.3.0** version.
-
-From the repository root:
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It installs Python 3.14 for you if you do not have it.
 
 ```sh
+git clone https://github.com/legioncodeinc/claude-chatgpt-extractor
+cd claude-chatgpt-extractor
 uv tool install .
-aik-sessions --version
-```
-
-This installs the command and its declared dependencies into an isolated local tool environment. It does not register a client or upload conversations. If a desktop application's PATH differs from your terminal's, use the full executable path reported by `command -v aik-sessions` (or `where aik-sessions` on Windows).
-
-## First local search
-
-```sh
-aik-sessions discover
 aik-sessions index
 aik-sessions search 'webhook forwarding'
+```
+
+`index` finds your Claude Code and Codex sessions and reports what it indexed. `search` prints ranked matches (trimmed here):
+
+```json
+{
+  "results": [
+    {
+      "session_id": "codex:0199a2b4-7c1e-7d30-9f3e-2b6f8d1c4a55",
+      "position": 47,
+      "role": "assistant",
+      "source": "codex",
+      "project": "/Users/you/projects/billing",
+      "timestamp": "2026-11-03T15:22:10+00:00",
+      "snippet": "... the webhook forwarding rule now retries on 5xx ..."
+    }
+  ],
+  "total": 1,
+  "has_more": false
+}
+```
+
+Read the conversation around a hit with `aik-sessions read 'codex:0199a2b4-...' --offset 44`.
+
+## Features
+
+- **Four sources, one index.** Claude Code and Codex sessions are found automatically. Claude and ChatGPT chats are added from the providers' own data exports.
+- **Local and private.** One SQLite file with owner-only permissions. No embedding service, no hosted server, no account. Only the excerpts a tool call returns go to the client you connect.
+- **Built for models to use.** Six MCP tools whose descriptions, parameters and error messages tell a calling model what to do next.
+- **Search that composes with reading.** Every hit carries the message position, so a client jumps straight to the surrounding context.
+- **Only what was said.** Visible user and assistant text is indexed. Tool calls, tool results, system prompts and reasoning are left out.
+- **Secret masking.** Common API key, token, password and private-key formats are masked before they reach the index. This is best effort.
+- **Safe re-imports.** A newer export updates a conversation. An older snapshot never overwrites newer history.
+- **Optional Littlebird ingestion.** An explicit, resumable upload with a local delivery ledger. Nothing is sent unless you pass `--send`.
+
+## Install
+
+### Claude Code plugin
+
+The plugin bundles the MCP server, a skill that teaches Claude how to use it, and a hook that opens a getting-started page once. The hook does nothing until a page address is set in `hooks/welcome-url.txt`, and it needs a POSIX `sh` (on Windows, Git Bash or WSL).
+
+```text
+/plugin marketplace add legioncodeinc/claude-chatgpt-extractor
+/plugin install aik-sessions@legion-code
+```
+
+The server starts through `uv`, so `uv` must be on your PATH. The first start downloads dependencies and can take a minute. If the tools are missing after that first start, reconnect the server with `/mcp` or restart Claude Code.
+
+### Littlebird
+
+Install the command (see Quickstart), then in the Littlebird Mac app: **Integrations**, **Connectors**, **Add custom**, **Add a local server instead**. Choose **Program**, select the executable printed by `command -v aik-sessions`, add the argument `serve`, then **Test connection** and **Add server**.
+
+A first request to try:
+
+> Check the session index status, then search my past conversations for webhook forwarding. Read only the relevant pages and cite the session ID and date.
+
+See [docs/littlebird.md](docs/littlebird.md) for copying conversations into Littlebird's own context.
+
+### Other MCP clients
+
+Any client that launches a stdio server works. Start from [examples/littlebird-local.json](examples/littlebird-local.json) for JSON `mcpServers` configuration, or [examples/codex.toml](examples/codex.toml) for Codex. Use the absolute path of the executable. This package never edits a client's configuration for you.
+
+## Usage
+
+### Add Claude and ChatGPT chats
+
+Chats from the web and desktop apps come from each provider's data export ([ChatGPT](https://help.openai.com/en/articles/7260999-exporting-your-chatgpt-history-and-data), [Claude](https://support.claude.com/en/articles/9450526-how-can-i-export-my-claude-data)). Put the downloaded ZIP in the `imports` folder of the data directory and index again:
+
+```sh
+mkdir -p ~/.local/share/aik-session-mcp/imports && chmod 700 ~/.local/share/aik-session-mcp
+mv ~/Downloads/your-export.zip ~/.local/share/aik-session-mcp/imports/
+aik-sessions index
+```
+
+Or point at a file or folder for one run: `aik-sessions --import-path /absolute/path/export.zip index`. Nothing scans your home folder or Downloads on its own.
+
+### Search
+
+```sh
 aik-sessions search '"payment failed"' --source codex --start-date 2026-11-01
-aik-sessions read 'codex:SESSION-ID'
+aik-sessions search stripe --project billing --limit 5
 ```
 
-Search uses SQLite FTS5 ranking, literal terms combined with AND, and quoted phrases. It is lexical search; no embedding service is called. Results include original message dates, source, project, session ID, and bounded excerpts.
+Search is keyword based. Every word must appear in one message or in its conversation title, and double quotes match an exact phrase. There are no operators and no semantic matching.
 
-The default data directory is `~/.local/share/aik-session-mcp` on macOS/Linux, respecting `XDG_DATA_HOME`; Windows uses `%LOCALAPPDATA%/aik-session-mcp`. `AIK_SESSIONS_DATA_DIR` or `--data-dir` can select another dedicated private directory. New state directories and files use private permissions. Existing permissive or symlinked database paths are rejected rather than silently changed.
+### MCP tools
 
-### Import browser and desktop chat exports
-
-Pass export files or a dedicated export folder explicitly:
-
-```sh
-aik-sessions --import-path /absolute/path/chatgpt-export.zip index
-aik-sessions --import-path /absolute/path/claude-conversations.json index
-aik-sessions --import-path /absolute/path/exports index
-```
-
-Alternatively, put exports in the `imports` subdirectory of your data directory. Files remain where you put them. ZIP members are read in place without extracting files to disk.
-
-Global options such as `--data-dir`, `--home`, `--claude-root`, `--codex-root`, and `--import-path` go **before** the command. Overrides are configuration roots such as `.claude` or `.codex`, not their nested `projects` or `sessions` folders.
-
-Indexing is incremental by file size/mtime; `index --force` reparses unchanged files. Reimported sessions deduplicate by source and native session ID. When duplicate snapshots come from different paths, older snapshots cannot overwrite newer history. Equal-date or undated alternatives must be a strict extension of the existing messages; ambiguous alternatives are skipped with warnings. Same-file updates still reflect truncation or rotation. Source deletion does not automatically delete the local index. Run `sessions_refresh` after new chats arrive, or restart the server to refresh in the background.
-
-## Connect to Littlebird
-
-The installed Littlebird Mac app was inspected on November 11, 2026. It exposes:
-
-1. **Integrations → Connectors → Add custom**.
-2. **Add a local server instead**.
-3. **Program**, **Python**, **Node**, and **Local URL** runtime choices, plus **Paste config**.
-4. **Test connection**, then **Add server**.
-
-Select **Program** and the installed `aik-sessions` executable, with argument `serve`, or adapt [the local configuration example](examples/littlebird-local.json) using its absolute executable path. The JSON `mcpServers` shape is also usable by local clients that accept that format. The actual Littlebird connection must be tested after installation; inspecting the form does not establish that a server was registered.
-
-The server uses stdio by default. It starts quickly, then refreshes the index in the background. Ask for `sessions_status` to see progress and any failure, and search after the initial index is ready. There is no public server or tunnel required for this local connection.
-
-Suggested first request in Littlebird:
-
-> Use the AIK session tools to check indexing status, then search my Claude and Codex conversations for webhook forwarding. Read only the relevant message pages and cite their original dates and session IDs.
-
-Littlebird documents custom MCP connectors in [Integrations](https://docs.littlebird.ai/docs/integrations/#bring-your-own-mcp-server). A live search returns selected local excerpts to the calling client; it does not populate Littlebird's long-term context by itself.
-
-### Other local MCP clients
-
-Claude Desktop/Claude Code and other JSON-configured clients can use the `mcpServers` example above. For Codex, use its TOML format, shown in [examples/codex.toml](examples/codex.toml). Examples are supplied only; this package never edits your client configuration automatically.
-
-### Optional loopback HTTP
-
-For a client that needs a local URL, set a long random `AIK_SESSIONS_TOKEN` privately and run:
-
-```sh
-aik-sessions serve --transport http --port 8765
-```
-
-Connect to `http://127.0.0.1:8765/mcp` and supply `Authorization: Bearer <your token>`. Every request must authenticate. The token must contain at least 32 characters and no whitespace. The listener binds only `127.0.0.1`; the SDK also checks Host/Origin to prevent DNS rebinding. This is a private static-token interface, not a public OAuth deployment. No public exposure, tunnel or OAuth authorization server is configured.
-
-## Bulk ingestion into Littlebird
-
-This is separate from live search. It transfers conversation text to Littlebird, where it may become context for replies and routines. Littlebird's [official MCP documentation](https://docs.littlebird.ai/docs/mcp/#adding-context-from-another-app) describes that behavior.
-
-Preview a selected source first. The default is a local dry run and makes no connection to Littlebird:
-
-```sh
-aik-sessions ingest --source codex --max-documents 100
-```
-
-For a real transfer, first authenticate explicitly through Littlebird's browser OAuth flow:
-
-```sh
-aik-sessions littlebird-auth
-aik-sessions ingest --source codex --max-documents 100 --send
-```
-
-The login command opens a bounded callback listener on loopback and stores OAuth state privately. A locally supplied `LITTLEBIRD_ACCESS_TOKEN` is also supported; never paste a token into chat or commit it. The ingestion command uses Littlebird's official MCP endpoint at `https://mcp.littlebird.ai/mcp`, not an invented REST endpoint. Dry runs do not read credentials or start authentication.
-
-Documents are bounded text chunks, with source, session/message IDs and historical timestamps carried in the text. `--max-documents` caps a run; use its returned `next_cursor` with `--after` to continue. The uploader streams bounded pages instead of loading an entire export into memory. A local content-hash ledger skips documents already confirmed delivered.
-
-Littlebird's exposed ingestion schema accepts text only. It supplies no external-ID/upsert contract or documented exactly-once guarantee. A request that was dispatched but lacks an affirmative receipt is marked **uncertain**, and the uploader stops. It will not silently resend that document. Check Littlebird, then record what you found:
-
-```sh
-aik-sessions resolve-delivery DOCUMENT-ID CONTENT-HASH --outcome sent --reviewed
-```
-
-If you verified it was not received, use `--outcome failed` instead, then resume. This review is a local ledger update, not a remote deletion or retry. An index revision invalidates an old export cursor; restart from the beginning and let confirmed delivery hashes deduplicate the replay.
-
-## Tools
-
-| Tool | Behavior |
+| Tool | What it does |
 | --- | --- |
-| `sessions_discover` | Read configured source locations and file counts, capped file metadata list |
-| `sessions_status` | Read index counts, refresh progress, and delivery status |
-| `sessions_refresh` | Refresh the local index without uploading |
-| `sessions_search` | Search ranked excerpts, optionally filtered by source, project and dates |
-| `sessions_read` | Read a bounded page, including lossless continuation within long messages |
-| `sessions_export_batch` | Return bounded, attributed text and a resume cursor; no upload |
+| `sessions_search` | Ranked keyword search with source, project and date filters |
+| `sessions_read` | Read part of one conversation, with lossless continuation through long messages |
+| `sessions_status` | Index size, refresh state and upload ledger counts |
+| `sessions_discover` | List the files the server can see, without reading them |
+| `sessions_refresh` | Index new or changed conversations. Never uploads |
+| `sessions_export_batch` | Return attributed text in resumable batches. Never uploads |
 
-Search/read/export tools cannot select arbitrary filesystem paths. The process's startup options select roots. Source and message content are untrusted historical data, not instructions for the client to follow.
+Full schemas, outputs, errors and examples are in [docs/tools.md](docs/tools.md).
 
-## Data handling and limits
+### Commands
 
-- Only visible human/user and assistant text is indexed. System/developer instructions, reasoning blocks, tool calls/results, binary attachments, and replay request blobs are excluded.
-- ChatGPT exports follow the active `current_node` ancestry. A missing pointer selects the latest leaf with a warning. Broken or cyclic ancestry fails closed.
-- Claude subagents and Codex subagents retain separate identity and parent provenance. Codex inherited prefixes are excluded when an explicit boundary is available.
-- Incomplete final JSONL lines are skipped with warnings and revisited after the source changes.
-- Common API-token, bearer-token, credential-assignment, database-URI and private-key patterns are masked before indexing. This is best-effort secret masking, not a guarantee that all secrets or personal information are removed. Review the selected material before upload.
-- SQLite is local and protected by filesystem permissions, not encrypted by this package. Search results are transmitted to whichever MCP client invoked the tool.
-- Bounds: 50,000 discovered files; depth 32; 256 MiB per JSON export; 100,000 messages per session; 10,000 ZIP members and 512 MiB actual expanded ZIP content. Native Claude Code/Codex files stream up to 4 GiB expanded per file and 64 MiB per record; generic and ZIP JSONL retain the stricter 512 MiB/file and 16 MiB/record bounds. Oversized/unsupported inputs produce warnings. Files with parse warnings are rechecked on refresh. Search excerpts, reads and export responses are bounded separately.
-- No provider cloud synchronization, scheduled background uploader, account creation, hosted server, or billing operation is included.
+`discover`, `index`, `status`, `search`, `read`, `export`, `serve`, `littlebird-auth`, `ingest` and `resolve-delivery`. Run `aik-sessions <command> --help` for flags. Global options go before the command.
 
-## Development checks
+## Configuration
 
-After installing the declared runtime dependencies into your chosen environment:
+| Option | Environment variable | Default | Purpose |
+| --- | --- | --- | --- |
+| `--data-dir` | `AIK_SESSIONS_DATA_DIR` | `~/.local/share/aik-session-mcp` (respects `XDG_DATA_HOME`), `%LOCALAPPDATA%\aik-session-mcp` on Windows | Index, import folder and upload state |
+| `--claude-root` | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code configuration root |
+| `--codex-root` | `CODEX_HOME` | `~/.codex` | Codex configuration root |
+| `--import-path` | | none | Export file or folder. Repeatable |
+| `--home` | | your home folder | Where `.claude` and `.codex` are looked up |
+| `serve --no-auto-index` | | off | Skip the background refresh at startup |
+| `serve --transport http` | `AIK_SESSIONS_TOKEN` (required) | stdio | Loopback HTTP on `127.0.0.1` with a bearer token |
+| | `LITTLEBIRD_ACCESS_TOKEN` | none | Use an existing token instead of browser sign-in |
+| | `AIK_SESSIONS_NO_WELCOME=1` | unset | Stop the plugin's getting-started page from opening |
+
+Limits, masking rules, what is excluded and the HTTP transport are documented in [docs/data-handling.md](docs/data-handling.md).
+
+## Contributing
+
+Issues and pull requests are welcome at [legioncodeinc/claude-chatgpt-extractor](https://github.com/legioncodeinc/claude-chatgpt-extractor). Before opening one, run:
 
 ```sh
-PYTHONPATH=src python -m unittest discover -s tests -v
-python -m compileall -q src
+uv run --no-editable python -m unittest discover -s tests
+claude plugin validate . --strict
 ```
 
-Tests use synthetic temporary conversations. They cover parsers, compressed/ZIP imports, duplicate handling, filters, bounded continuation, secret masking, delivery checkpoints, real SDK stdio/subprocess calls, and authenticated in-process HTTP requests. Live Littlebird login, real ingestion, and cloud search retrieval are separate integration checks.
+Tests use synthetic conversations only. After changing the version in `pyproject.toml`, update `src/aik_sessions/__init__.py` and `.claude-plugin/plugin.json` to match and run `uv lock`. A test fails if they disagree.
 
-Protocol implementation uses the official [MCP Python SDK 2.3](https://github.com/modelcontextprotocol/python-sdk/tree/v2.3.0), including its typed tool schemas and transports.
+## License
+
+Licensed under the GNU Affero General Public License v3.0. See [LICENSE.md](LICENSE.md).

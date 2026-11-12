@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -16,6 +17,19 @@ from aik_sessions.parsers import parse_file
 from aik_sessions.privacy import redact_session
 
 _PARSER_REVISION = 2
+_MAX_WARNING_CHARS = 300
+
+
+def _safe_warning(text: str) -> str:
+    """Bound a diagnostic and drop control characters.
+
+    Warnings can quote file names and session IDs, which come from the files being
+    indexed. They are shown to a calling model, so keep them short and single-line.
+    """
+    cleaned = "".join(character if character.isprintable() else " " for character in text)
+    if len(cleaned) > _MAX_WARNING_CHARS:
+        cleaned = cleaned[:_MAX_WARNING_CHARS] + " [truncated]"
+    return cleaned
 
 
 @dataclass(frozen=True)
@@ -82,7 +96,8 @@ class SessionService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._lock = threading.Lock()
-        self._progress: dict[str, Any] = {"running": False, "indexed_files": 0}
+        self._progress: dict[str, Any] = {"state": "never_run", "running": False,
+                                          "indexed_files": 0}
 
     def discovery(self) -> dict[str, Any]:
         result = discover(home=self.settings.home, import_paths=self.settings.imports,
@@ -120,18 +135,27 @@ class SessionService:
 
     def index_sources(self, *, force: bool = False) -> dict[str, Any]:
         if not self._lock.acquire(blocking=False):
-            return {"running": True, "message": "Index refresh already running."}
+            return {"state": "running", "running": True,
+                    "message": "An index refresh is already running. Check sessions_status "
+                               "for progress instead of starting another."}
         index: SessionIndex | None = None
+        manifest: dict[str, list[int]] | None = None
         try:
-            self._progress = {"running": True, "indexed_files": 0, "skipped_files": 0,
-                              "ignored_older": 0, "ignored_ambiguous": 0}
+            self._progress = {"state": "running", "running": True, "indexed_files": 0,
+                              "skipped_files": 0, "ignored_older": 0, "ignored_ambiguous": 0}
             found = discover(home=self.settings.home, import_paths=self.settings.imports,
                              claude_root=self.settings.claude_root,
                              codex_root=self.settings.codex_root)
             manifest = self._manifest()
             index = SessionIndex(self.settings.database)
-            warnings = list(found.warnings)
+            if index.stats()["sessions"] == 0:
+                # The manifest says which files are already indexed. If the index is
+                # empty (deleted, recreated, first run) that record is stale; trusting
+                # it would skip every file and leave the index empty for good.
+                manifest = {}
+            warnings = [_safe_warning(item) for item in found.warnings]
             session_count = 0
+            self._progress["total_files"] = len(found.files)
             for item in found.files:
                 try:
                     stat = Path(item.path).stat()
@@ -140,13 +164,14 @@ class SessionService:
                         self._progress["skipped_files"] += 1
                         continue
                     parsed = parse_file(item)
-                    warnings.extend(parsed.warnings)
+                    warnings.extend(_safe_warning(item) for item in parsed.warnings)
                     for session in parsed.sessions:
                         outcome = index.upsert(redact_session(session))
                         status = outcome.get("status")
                         if status in ("ignored_older", "ignored_ambiguous"):
                             self._progress[status] += 1
-                            warnings.append(f"{status}: retained indexed history for {session.id}")
+                            warnings.append(_safe_warning(
+                                f"{status}: retained indexed history for {session.id[:120]!r}"))
                         session_count += 1
                     if not parsed.warnings:
                         manifest[item.path] = signature
@@ -155,16 +180,33 @@ class SessionService:
                         # so unresolved partial/corrupt records never disappear from status.
                         manifest.pop(item.path, None)
                     self._progress["indexed_files"] += 1
-                except (OSError, ValueError) as exc:
-                    warnings.append(f"Could not index {item.path}: {type(exc).__name__}")
+                except sqlite3.Error:
+                    # The index itself is unavailable; continuing would fail every file.
+                    raise
+                except Exception as exc:
+                    # Any other failure belongs to this one file. Record it and move on:
+                    # a single malformed file must never stop the rest being indexed.
+                    manifest.pop(item.path, None)
+                    warnings.append(_safe_warning(
+                        f"Could not index {item.path}: {type(exc).__name__}"))
             self._save_manifest(manifest)
-            result = {**self._progress, "running": False, "sessions_processed": session_count,
+            result = {**self._progress, "state": "complete", "running": False,
+                      "sessions_processed": session_count,
                       "warnings": warnings[:100], "warning_count": len(warnings),
                       "stats": index.stats()}
             self._progress = result
             return result
-        except Exception:
-            self._progress = {**self._progress, "running": False, "failed": True}
+        except Exception as exc:
+            # Keep the files that did finish, so an interrupted first index of a large
+            # archive resumes instead of starting over. Only the exception type is
+            # recorded: messages could carry paths or transcript fragments.
+            if manifest is not None:
+                try:
+                    self._save_manifest(manifest)
+                except OSError:
+                    pass
+            self._progress = {**self._progress, "state": "failed", "running": False,
+                              "failed": True, "error": type(exc).__name__}
             raise
         finally:
             if index is not None:
@@ -175,7 +217,8 @@ class SessionService:
         def run() -> None:
             try:
                 self.index_sources()
-            except Exception:
+            except Exception as exc:
                 # Tool status exposes failure; never log transcript fragments or credentials.
-                self._progress = {**self._progress, "running": False, "failed": True}
+                self._progress = {**self._progress, "state": "failed", "running": False,
+                                  "failed": True, "error": type(exc).__name__}
         threading.Thread(target=run, name="aik-session-index", daemon=True).start()

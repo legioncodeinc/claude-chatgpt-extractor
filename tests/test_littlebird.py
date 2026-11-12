@@ -60,6 +60,9 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         sender = AsyncMock(return_value={"isError": True})
         report = await send_batch(index, index.documents, sender)
         self.assertEqual(report["uncertain"], 1)
+        # resolve-delivery needs both values, so the report must carry both.
+        self.assertEqual((report["blocked_document_id"], report["blocked_content_hash"]),
+                         ("doc-1", "hash-doc-1"))
         self.assertEqual(sender.await_count, 1)
         self.assertEqual(index.delivery_status("doc-1", "hash-doc-1"), "uncertain")
 
